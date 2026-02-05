@@ -302,7 +302,18 @@
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <script type="module">
+    // Import Firebase order functions
+    import { createOrder, getUserAddresses, getUserOrders } from './firebase-orders.js';
+    
+    // Make functions globally available
+    window.createOrder = createOrder;
+    window.getUserAddresses = getUserAddresses;
+    window.getUserOrders = getUserOrders;
+    </script>
+
+<!-- Your app.js -->
+<script src="app.js"></script>
     <script type="module" src="auth-handler.js"></script>
     <script src="mobile-menu.js"></script>
 </body>
