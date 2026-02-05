@@ -670,45 +670,211 @@ function loadCheckoutSummary() {
     summaryTotal.textContent = '₹' + Math.round(total).toLocaleString('en-IN');
 }
 
-function placeOrder() {
-    // Validate form
-    const fullName = document.getElementById('fullName');
-    const phone = document.getElementById('phone');
-    const address1 = document.getElementById('address1');
-    const city = document.getElementById('city');
-    const state = document.getElementById('state');
-    const pincode = document.getElementById('pincode');
-    
-    if (!fullName.value || !phone.value || !address1.value || !city.value || !state.value || !pincode.value) {
-        showToast('Please fill in all required fields ⚠️', 'error');
+async function placeOrder() {
+    // 1. Check if user is logged in
+    if (!currentUser || !currentUser.uid) {
+        showToast('Please login to place an order', 'error');
+        setTimeout(() => {
+            window.location.href = 'login.html';
+        }, 1500);
         return;
     }
     
-    if (cart.length === 0) {
-        showToast('Your cart is empty! 🛒', 'error');
+    // 2. Validate cart
+    if (!cart || cart.length === 0) {
+        showToast('Your cart is empty!', 'error');
         return;
     }
     
-    // Generate order ID
-    const orderId = 'TB' + Date.now().toString().slice(-8);
-    const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const gst = subtotal * 0.18;
-    const total = subtotal + gst;
+    // 3. Get form data
+    const fullName = document.getElementById('fullName').value.trim();
+    const phone = document.getElementById('phone').value.trim();
+    const address1 = document.getElementById('address1').value.trim();
+    const address2 = document.getElementById('address2').value.trim();
+    const city = document.getElementById('city').value.trim();
+    const state = document.getElementById('state').value;
+    const pincode = document.getElementById('pincode').value.trim();
+    const landmark = document.getElementById('landmark')?.value.trim() || '';
     
-    // Show confirmation modal
+    // 4. Validate required fields
+    if (!fullName || !phone || !address1 || !city || !state || !pincode) {
+        showToast('Please fill in all required fields', 'error');
+        return;
+    }
+    
+    // 5. Validate phone number (10 digits)
+    if (!/^[0-9]{10}$/.test(phone)) {
+        showToast('Please enter a valid 10-digit phone number', 'error');
+        return;
+    }
+    
+    // 6. Validate pincode (6 digits)
+    if (!/^[0-9]{6}$/.test(pincode)) {
+        showToast('Please enter a valid 6-digit pincode', 'error');
+        return;
+    }
+    
+    // 7. Get payment method
+    const paymentMethod = document.querySelector('input[name="payment"]:checked');
+    if (!paymentMethod) {
+        showToast('Please select a payment method', 'error');
+        return;
+    }
+    
+    // 8. Calculate order totals
+    const itemsPrice = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const taxPrice = Math.round(itemsPrice * 0.18); // 18% GST
+    const shippingPrice = 0; // Free shipping
+    const totalPrice = itemsPrice + taxPrice + shippingPrice;
+    
+    // 9. Prepare order data for Firebase
+    const orderData = {
+        // Customer info
+        customerName: currentUser.name,
+        customerEmail: currentUser.email,
+        customerPhone: currentUser.phone || phone,
+        
+        // Shipping address
+        shippingAddress: {
+            fullName: fullName,
+            phone: phone,
+            addressLine1: address1,
+            addressLine2: address2,
+            city: city,
+            state: state,
+            pincode: pincode,
+            landmark: landmark
+        },
+        
+        // Order items
+        items: cart.map(item => ({
+            id: item.id,
+            name: item.name,
+            price: item.price,
+            quantity: item.quantity,
+            image: item.image
+        })),
+        
+        // Pricing
+        itemsPrice: itemsPrice,
+        taxPrice: taxPrice,
+        shippingPrice: shippingPrice,
+        totalPrice: totalPrice,
+        
+        // Payment
+        paymentMethod: paymentMethod.value
+    };
+    
+    console.log('📦 Placing order...', orderData);
+    
+    try {
+        // 10. Show loading state
+        const placeOrderBtn = document.querySelector('button[onclick="placeOrder()"]');
+        if (!placeOrderBtn) {
+            // Try alternative selector
+            placeOrderBtn = document.querySelector('.btn-primary');
+        }
+        
+        if (placeOrderBtn) {
+            const originalText = placeOrderBtn.textContent;
+            placeOrderBtn.textContent = 'Processing...';
+            placeOrderBtn.disabled = true;
+        }
+        
+        // 11. Create order in Firebase
+        let result;
+        
+        if (typeof createOrder === 'function') {
+            console.log('🔥 Creating order in Firebase...');
+            result = await createOrder(currentUser.uid, orderData);
+        } else {
+            // Fallback: Generate order ID locally
+            console.log('📦 Firebase not available, using localStorage');
+            result = {
+                success: true,
+                orderId: 'TB' + Date.now().toString().slice(-8),
+                message: 'Order placed successfully!'
+            };
+            
+            // Save to localStorage as backup
+            const orders = JSON.parse(localStorage.getItem('orders') || '[]');
+            orders.push({
+                ...orderData,
+                orderId: result.orderId,
+                createdAt: new Date().toISOString(),
+                orderStatus: 'pending'
+            });
+            localStorage.setItem('orders', JSON.stringify(orders));
+        }
+        
+        if (result.success) {
+            console.log('✅ Order created successfully:', result.orderId);
+            
+            // 12. Clear cart in Firebase
+            if (typeof saveCart === 'function') {
+                await saveCart(currentUser.uid, []);
+            }
+            
+            // 13. Clear cart from localStorage
+            cart = [];
+            localStorage.removeItem('cart');
+            updateCartCount();
+            
+            // 14. Show success modal
+            showOrderConfirmation(result.orderId, totalPrice);
+            
+            // 15. Show success toast
+            showToast(result.message, 'success');
+            
+        } else {
+            // Error creating order
+            console.error('❌ Order creation failed:', result.message);
+            showToast(result.message || 'Failed to place order. Please try again.', 'error');
+            
+            // Restore button
+            if (placeOrderBtn) {
+                placeOrderBtn.textContent = originalText;
+                placeOrderBtn.disabled = false;
+            }
+        }
+        
+    } catch (error) {
+        console.error('❌ Order placement error:', error);
+        showToast('An error occurred. Please try again.', 'error');
+        
+        // Restore button
+        const placeOrderBtn = document.querySelector('.btn-primary');
+        if (placeOrderBtn) {
+            placeOrderBtn.textContent = 'Place Order';
+            placeOrderBtn.disabled = false;
+        }
+    }
+}
+
+// Make function globally available
+window.placeOrder = placeOrder;
+
+// Order confirmation modal
+function showOrderConfirmation(orderId, totalPrice) {
     const modal = document.getElementById('confirmationModal');
-    const orderIdElement = document.getElementById('orderId');
-    const orderTotalElement = document.getElementById('orderTotal');
+    const orderIdSpan = document.getElementById('orderId');
+    const orderTotalSpan = document.getElementById('orderTotal');
     
-    orderIdElement.textContent = orderId;
-    orderTotalElement.textContent = '₹' + Math.round(total).toLocaleString('en-IN');
-    
-    modal.classList.add('active');
-    
-    // Clear cart
-    cart = [];
-    localStorage.setItem('cart', JSON.stringify(cart));
-    updateCartCount();
+    if (modal && orderIdSpan && orderTotalSpan) {
+        orderIdSpan.textContent = orderId;
+        orderTotalSpan.textContent = '₹' + totalPrice.toLocaleString('en-IN');
+        modal.style.display = 'flex';
+        
+        // Auto-redirect after 5 seconds
+        setTimeout(() => {
+            window.location.href = 'index.html';
+        }, 5000);
+    } else {
+        // Fallback: redirect immediately
+        setTimeout(() => {
+            window.location.href = 'index.html';
+        }, 2000);
+    }
 }
 
 // Newsletter subscription
